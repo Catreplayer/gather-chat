@@ -357,7 +357,7 @@ body[data-theme="dark"] .appearance-button[aria-expanded="true"] { background: #
           </div>
         </div>
       </div>
-      <div class="top-user"><span class="avatar avatar-small avatar-fallback">G</span><span>Guest</span></div>
+      <div class="top-user"><img id="top-avatar" class="avatar avatar-small hidden" alt=""><span id="top-avatar-fallback" class="avatar avatar-small avatar-fallback">G</span><span>Guest</span></div>
     </div>
   </header>
   <main class="workspace">
@@ -375,13 +375,13 @@ body[data-theme="dark"] .appearance-button[aria-expanded="true"] { background: #
       <form id="message-form" class="composer">
         <input id="file-input" type="file" hidden>
         <button id="attach-button" class="icon-button attach-button" type="button" aria-label="Attach a file" title="Attach a file">＋</button>
-        <div class="composer-main"><div id="file-preview" class="file-preview hidden"></div><textarea id="message-input" rows="1" maxlength="4000" placeholder="Say something nice…" aria-label="Message"></textarea><div class="composer-foot"><span>Local demo · Messages stay in this browser.</span><span id="char-count">0 / 4000</span></div></div>
+        <div class="composer-main"><div id="file-preview" class="file-preview hidden"></div><textarea id="message-input" rows="1" maxlength="4000" placeholder="Say something nice…" aria-label="Message"></textarea><div class="composer-foot"><span>Saved in this browser only · Not shared with other devices.</span><span id="char-count">0 / 4000</span></div></div>
         <button class="send-button" type="submit" aria-label="Send message" title="Send message">↑</button>
       </form>
     </section>
     <aside class="sidebar" id="members-sidebar">
       <div class="sidebar-heading"><div><span class="eyebrow">THE GOOD COMPANY</span><h2>People <span>(1)</span></h2></div><button class="icon-button close-sidebar" id="close-sidebar" aria-label="Close members">×</button></div>
-      <div class="profile-card"><div class="profile-avatar-wrap"><span class="avatar avatar-large avatar-fallback">G</span></div><div class="profile-name">Guest <span class="you-tag">YOU</span></div><span class="role-badge role-owner">owner</span><p>Standalone HTML preview.</p></div>
+      <div class="profile-card"><div class="profile-avatar-wrap"><img id="profile-avatar" class="avatar avatar-large hidden" alt=""><span id="profile-avatar-fallback" class="avatar avatar-large avatar-fallback">G</span><label class="avatar-edit" for="avatar-input" title="Change your avatar" aria-label="Change your avatar">✎</label><input id="avatar-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></div><div class="profile-name">Guest <span class="you-tag">YOU</span></div><span class="role-badge role-owner">owner</span><p>Profile is saved in this browser.</p></div>
       <div class="owner-note"><span>✦</span><div><strong>Demo owner</strong><small>Live group management needs the app server.</small></div></div>
       <div class="members-list"><div class="member-item"><div class="member-details"><span class="avatar avatar-member avatar-fallback">G</span><div class="member-info"><strong>Guest (you)</strong><span class="role-badge role-owner">owner</span></div></div></div></div>
       <div class="sidebar-footer"><span class="online-dot"></span> Your group is a little brighter together.</div>
@@ -468,7 +468,123 @@ body[data-theme="dark"] .appearance-button[aria-expanded="true"] { background: #
     const fileInput = document.querySelector('#file-input');
     const preview = document.querySelector('#file-preview');
     const error = document.querySelector('#error-banner');
+    let database;
     let file = null;
+    let avatarUrl = null;
+
+    function openDatabase() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open('gather-local-chat', 1);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains('messages')) {
+            db.createObjectStore('messages', { keyPath: 'id', autoIncrement: true });
+          }
+          if (!db.objectStoreNames.contains('settings')) {
+            db.createObjectStore('settings', { keyPath: 'key' });
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('Could not open browser storage.'));
+        request.onblocked = () => reject(new Error('Browser storage is blocked by another Gather tab.'));
+      });
+    }
+
+    function storeRequest(storeName, mode, action) {
+      return new Promise((resolve, reject) => {
+        const transaction = database.transaction(storeName, mode);
+        const request = action(transaction.objectStore(storeName));
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('Could not save browser data.'));
+        transaction.onabort = () => reject(transaction.error || new Error('Browser storage transaction failed.'));
+      });
+    }
+
+    function showPersistenceError() {
+      error.textContent = 'Browser storage is unavailable. Your chat may not be saved on this device.';
+      error.classList.remove('hidden');
+    }
+
+    function setAvatar(blob) {
+      if (avatarUrl) URL.revokeObjectURL(avatarUrl);
+      avatarUrl = blob ? URL.createObjectURL(blob) : null;
+      const avatar = document.querySelector('#profile-avatar');
+      const topAvatar = document.querySelector('#top-avatar');
+      [avatar, topAvatar].forEach((image) => {
+        image.classList.toggle('hidden', !avatarUrl);
+        if (avatarUrl) image.src = avatarUrl;
+        else image.removeAttribute('src');
+      });
+      document.querySelector('#profile-avatar-fallback').classList.toggle('hidden', Boolean(avatarUrl));
+      document.querySelector('#top-avatar-fallback').classList.toggle('hidden', Boolean(avatarUrl));
+    }
+
+    function renderMessage(savedMessage) {
+      messages.querySelector('.empty-state')?.remove();
+      const row = document.createElement('article');
+      row.className = 'message message-own';
+      const avatar = avatarUrl
+        ? Object.assign(document.createElement('img'), { className: 'avatar avatar-message', src: avatarUrl, alt: '' })
+        : Object.assign(document.createElement('span'), { className: 'avatar avatar-message avatar-fallback', textContent: 'G' });
+      const body = document.createElement('div'); body.className = 'message-body';
+      const meta = document.createElement('div'); meta.className = 'message-meta';
+      const author = document.createElement('strong'); author.textContent = 'Guest';
+      const role = document.createElement('span'); role.className = 'role-badge role-owner'; role.textContent = 'owner';
+      const time = document.createElement('time');
+      time.dateTime = savedMessage.createdAt;
+      time.textContent = new Date(savedMessage.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      meta.append(author, role, time); body.append(meta);
+      if (savedMessage.content) {
+        const text = document.createElement('p'); text.className = 'message-text'; text.textContent = savedMessage.content; body.append(text);
+      }
+      if (savedMessage.fileBlob) {
+        const link = document.createElement('a'); link.className = 'attachment-card';
+        link.href = URL.createObjectURL(savedMessage.fileBlob); link.download = savedMessage.fileName;
+        const icon = document.createElement('span'); icon.className = 'attachment-icon'; icon.textContent = '↧';
+        const info = document.createElement('span'); info.className = 'attachment-info';
+        const fileName = document.createElement('strong'); fileName.textContent = savedMessage.fileName;
+        const hint = document.createElement('small'); hint.textContent = 'Click to download';
+        info.append(fileName, hint); link.append(icon, info); body.append(link);
+      }
+      row.append(avatar, body);
+      messages.append(row);
+    }
+
+    async function restoreLocalData() {
+      try {
+        database = await openDatabase();
+        const [savedMessages, savedAvatar] = await Promise.all([
+          storeRequest('messages', 'readonly', (store) => store.getAll()),
+          storeRequest('settings', 'readonly', (store) => store.get('avatar')),
+        ]);
+        if (savedAvatar?.blob) setAvatar(savedAvatar.blob);
+        savedMessages.forEach(renderMessage);
+        messages.scrollTop = messages.scrollHeight;
+      } catch (storageError) {
+        console.error('Unable to restore Gather browser data:', storageError);
+        showPersistenceError();
+      }
+    }
+
+    document.querySelector('#avatar-input').addEventListener('change', async (event) => {
+      const image = event.target.files[0];
+      if (!image) return;
+      try {
+        if (!image.type.startsWith('image/')) throw new Error('Choose an image file for your avatar.');
+        if (!database) database = await openDatabase();
+        await storeRequest('settings', 'readwrite', (store) => store.put({ key: 'avatar', blob: image }));
+        setAvatar(image);
+      } catch (storageError) {
+        console.error('Unable to save Gather avatar:', storageError);
+        error.textContent = storageError.message || 'Could not save your avatar in this browser.';
+        error.classList.remove('hidden');
+      } finally {
+        event.target.value = '';
+      }
+    });
+
+    restoreLocalData();
+
     document.querySelector('#attach-button').addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', () => {
       file = fileInput.files[0] || null;
@@ -486,29 +602,27 @@ body[data-theme="dark"] .appearance-button[aria-expanded="true"] { background: #
       document.querySelector('#char-count').textContent = `${input.value.length} / 4000`;
     });
     input.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } });
-    form.addEventListener('submit', (event) => {
+    form.addEventListener('submit', async (event) => {
       event.preventDefault();
       const content = input.value.trim();
       if (!content && !file) return;
-      messages.querySelector('.empty-state')?.remove();
-      const row = document.createElement('article'); row.className = 'message message-own';
-      const avatar = document.createElement('span'); avatar.className = 'avatar avatar-message avatar-fallback'; avatar.textContent = 'G';
-      const body = document.createElement('div'); body.className = 'message-body';
-      const meta = document.createElement('div'); meta.className = 'message-meta';
-      const author = document.createElement('strong'); author.textContent = 'Guest';
-      const role = document.createElement('span'); role.className = 'role-badge role-owner'; role.textContent = 'owner';
-      const time = document.createElement('time'); time.textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      meta.append(author, role, time); body.append(meta);
-      if (content) { const text = document.createElement('p'); text.className = 'message-text'; text.textContent = content; body.append(text); }
-      if (file) {
-        const link = document.createElement('a'); link.className = 'attachment-card'; link.href = URL.createObjectURL(file); link.download = file.name;
-        const icon = document.createElement('span'); icon.className = 'attachment-icon'; icon.textContent = '↧';
-        const info = document.createElement('span'); info.className = 'attachment-info';
-        const fileName = document.createElement('strong'); fileName.textContent = file.name;
-        const hint = document.createElement('small'); hint.textContent = 'Click to download';
-        info.append(fileName, hint); link.append(icon, info); body.append(link);
+      const savedMessage = {
+        content,
+        fileName: file ? file.name : null,
+        fileBlob: file || null,
+        createdAt: new Date().toISOString(),
+      };
+      try {
+        if (!database) database = await openDatabase();
+        savedMessage.id = await storeRequest('messages', 'readwrite', (store) => store.add(savedMessage));
+        renderMessage(savedMessage);
+        messages.scrollTop = messages.scrollHeight;
+      } catch (storageError) {
+        console.error('Unable to save Gather message:', storageError);
+        error.textContent = 'Could not save your message in this browser. Check available storage and try again.';
+        error.classList.remove('hidden');
+        return;
       }
-      row.append(avatar, body); messages.append(row); messages.scrollTop = messages.scrollHeight;
       input.value = ''; input.style.height = 'auto'; document.querySelector('#char-count').textContent = '0 / 4000';
       file = null; fileInput.value = ''; preview.classList.add('hidden'); preview.replaceChildren(); input.focus();
     });
